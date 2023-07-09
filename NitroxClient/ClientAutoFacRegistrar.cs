@@ -1,4 +1,4 @@
-﻿global using NitroxModel.Logger;
+global using NitroxModel.Logger;
 using System.Reflection;
 using Autofac;
 using Autofac.Core;
@@ -21,6 +21,8 @@ using NitroxClient.GameLogic.PlayerLogic.PlayerModel;
 using NitroxClient.GameLogic.PlayerLogic.PlayerModel.Abstract;
 using NitroxClient.GameLogic.PlayerLogic.PlayerPreferences;
 using NitroxClient.GameLogic.Settings;
+using NitroxClient.GameLogic.Spawning.Metadata;
+using NitroxClient.GameLogic.Spawning.Metadata.Extractor;
 using NitroxClient.Helpers;
 using NitroxClient.Map;
 using NitroxModel.Core;
@@ -104,9 +106,22 @@ namespace NitroxClient
                             .As<IMap>()
                             .InstancePerLifetimeScope();
 
+            containerBuilder.RegisterAssemblyTypes(currentAssembly)
+                            .AssignableTo<EntityMetadataExtractor>()
+                            .As<EntityMetadataExtractor>()
+                            .AsSelf()
+                            .SingleInstance();
+
+            containerBuilder.RegisterAssemblyTypes(currentAssembly)
+                            .AssignableTo<EntityMetadataProcessor>()
+                            .As<EntityMetadataProcessor>()
+                            .AsSelf()
+                            .SingleInstance();
+
             containerBuilder.RegisterType<PlayerManager>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<PlayerModelManager>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<PlayerVitalsManager>().InstancePerLifetimeScope();
+            containerBuilder.RegisterType<VisibleBatches>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<VisibleCells>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<PacketReceiver>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<Vehicles>().InstancePerLifetimeScope();
@@ -115,14 +130,10 @@ namespace NitroxClient
             containerBuilder.RegisterType<PlayerChatManager>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<Entities>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<MedkitFabricator>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<Item>().InstancePerLifetimeScope();
+            containerBuilder.RegisterType<Items>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<EquipmentSlots>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<ItemContainers>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<StorageSlots>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<PDAManagerEntry>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<PDAEncyclopediaEntry>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<SimulationOwnership>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<Crafting>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<Cyclops>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<Rockets>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<MobileVehicleBay>().InstancePerLifetimeScope();
@@ -132,10 +143,8 @@ namespace NitroxClient
             containerBuilder.RegisterType<Terrain>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<BuildThrottlingQueue>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<BasePieceSpawnPrioritizer>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<KnownTechEntry>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<ExosuitModuleEvent>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<SeamothModulesEvent>().InstancePerLifetimeScope();
-            containerBuilder.RegisterType<EscapePodManager>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<Fires>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<FMODSystem>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<LiveMixinManager>().InstancePerLifetimeScope();
@@ -143,6 +152,7 @@ namespace NitroxClient
             containerBuilder.RegisterType<ThrottledPacketSender>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<PlayerCinematics>().InstancePerLifetimeScope();
             containerBuilder.RegisterType<NitroxPDATabManager>().InstancePerLifetimeScope();
+            containerBuilder.RegisterType<TimeManager>().InstancePerLifetimeScope();
         }
 
         private void RegisterPacketProcessors(ContainerBuilder containerBuilder)

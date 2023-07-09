@@ -14,15 +14,11 @@ namespace NitroxClient.Communication.Packets.Processors
     {
         private readonly IPacketSender packetSender;
         private readonly Vehicles vehicles;
-        private readonly SimulationOwnership simulationOwnership;
-        private readonly PlayerManager remotePlayerManager;
 
-        public VehicleDockingProcessor(IPacketSender packetSender, Vehicles vehicles, SimulationOwnership simulationOwnership, PlayerManager remotePlayerManager)
+        public VehicleDockingProcessor(IPacketSender packetSender, Vehicles vehicles)
         {
             this.packetSender = packetSender;
             this.vehicles = vehicles;
-            this.simulationOwnership = simulationOwnership;
-            this.remotePlayerManager = remotePlayerManager;
         }
 
         public override void Process(VehicleDocking packet)
@@ -33,7 +29,7 @@ namespace NitroxClient.Communication.Packets.Processors
             Vehicle vehicle = vehicleGo.RequireComponent<Vehicle>();
             VehicleDockingBay vehicleDockingBay = vehicleDockingBayGo.RequireComponent<VehicleDockingBay>();
 
-            using (packetSender.Suppress<VehicleDocking>())
+            using (PacketSuppressor<VehicleDocking>.Suppress())
             {
                 Log.Debug($"Set vehicle docked for {vehicleDockingBay.gameObject.name}");
                 vehicle.GetComponent<MultiplayerVehicleControl>().SetPositionVelocityRotation(vehicle.transform.position, Vector3.zero, vehicle.transform.rotation, Vector3.zero);
@@ -44,12 +40,12 @@ namespace NitroxClient.Communication.Packets.Processors
 
         IEnumerator DelayAnimationAndDisablePiloting(Vehicle vehicle, VehicleDockingBay vehicleDockingBay, NitroxId vehicleId, ushort playerId)
         {
-            yield return new WaitForSeconds(1.0f);
+            yield return Yielders.WaitFor1Second;
             // DockVehicle sets the rigid body kinematic of the vehicle to true, we don't want that behaviour
             // Therefore disable kinematic (again) to remove the bouncing behavior
             vehicleDockingBay.DockVehicle(vehicle);
             vehicle.useRigidbody.isKinematic = false;
-            yield return new WaitForSeconds(2.0f);
+            yield return Yielders.WaitFor2Seconds;
             vehicles.SetOnPilotMode(vehicleId, playerId, false);
             if (!vehicle.docked)
             {

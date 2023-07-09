@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+using System.Collections;
 using NitroxClient.GameLogic.InitialSync.Base;
 using NitroxClient.MonoBehaviours;
 using NitroxModel.Core;
@@ -13,17 +12,19 @@ namespace NitroxClient.GameLogic.InitialSync
 {
     public class PlayerInitialSyncProcessor : InitialSyncProcessor
     {
+        private readonly Items item;
         private readonly ItemContainers itemContainers;
 
-        public PlayerInitialSyncProcessor(ItemContainers itemContainers)
+        public PlayerInitialSyncProcessor(Items item, ItemContainers itemContainers)
         {
+            this.item = item;
             this.itemContainers = itemContainers;
         }
 
         public override IEnumerator Process(InitialPlayerSync packet, WaitScreen.ManualWaitItem waitScreenItem)
         {
             SetPlayerPermissions(packet.Permissions);
-            waitScreenItem.SetProgress(0.17f);
+            waitScreenItem.SetProgress(0.16f);
             yield return null;
 
             SetPlayerGameObjectId(packet.PlayerGameObjectId);
@@ -31,7 +32,7 @@ namespace NitroxClient.GameLogic.InitialSync
             yield return null;
 
             yield return AddStartingItemsToPlayer(packet.FirstTimeConnecting);
-            waitScreenItem.SetProgress(0.5f);
+            waitScreenItem.SetProgress(0.50f);
             yield return null;
 
             SetPlayerStats(packet.PlayerStatsData);
@@ -40,10 +41,6 @@ namespace NitroxClient.GameLogic.InitialSync
 
             SetPlayerGameMode(packet.GameMode);
             waitScreenItem.SetProgress(0.83f);
-            yield return null;
-
-            SetPlayerCompletedGoals(packet.CompletedGoals);
-            waitScreenItem.SetProgress(1f);
             yield return null;
         }
 
@@ -69,8 +66,9 @@ namespace NitroxClient.GameLogic.InitialSync
                     GameObject gameObject = result.Get();
                     Pickupable pickupable = gameObject.GetComponent<Pickupable>();
                     pickupable.Initialize();
-                    itemContainers.AddItem(pickupable.gameObject, NitroxEntity.GetId(Player.main.gameObject));
-                    itemContainers.BroadcastItemAdd(pickupable, Inventory.main.container.tr);
+
+                    item.Created(gameObject);
+                    itemContainers.AddItem(gameObject, NitroxEntity.GetId(Player.main.gameObject));
                 }
             }
         }
@@ -105,12 +103,6 @@ namespace NitroxClient.GameLogic.InitialSync
         {
             Log.Info($"Received initial sync packet with gamemode {gameMode}");
             GameModeUtils.SetGameMode((GameModeOption)(int)gameMode, GameModeOption.None);
-        }
-
-        private void SetPlayerCompletedGoals(IEnumerable<string> completedGoals)
-        {
-            GoalManager.main.completedGoalNames.AddRange(completedGoals);
-            PlayerWorldArrows.main.completedCustomGoals.AddRange(completedGoals);
         }
     }
 }

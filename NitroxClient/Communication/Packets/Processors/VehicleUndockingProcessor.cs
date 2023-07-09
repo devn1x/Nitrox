@@ -31,7 +31,7 @@ namespace NitroxClient.Communication.Packets.Processors
             Vehicle vehicle = vehicleGo.RequireComponent<Vehicle>();
             VehicleDockingBay vehicleDockingBay = vehicleDockingBayGo.RequireComponent<VehicleDockingBay>();
 
-            using (packetSender.Suppress<VehicleUndocking>())
+            using (PacketSuppressor<VehicleUndocking>.Suppress())
             {
                 if (packet.UndockingStart)
                 {
@@ -68,7 +68,7 @@ namespace NitroxClient.Communication.Packets.Processors
 
         public IEnumerator StartUndockingAnimation(VehicleDockingBay vehicleDockingBay)
         {
-            yield return new WaitForSeconds(2.0f);
+            yield return Yielders.WaitFor2Seconds;
             vehicleDockingBay.vehicle_docked_param = false;
         }
 

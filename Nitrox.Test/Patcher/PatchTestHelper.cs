@@ -1,10 +1,12 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using FluentAssertions;
 using HarmonyLib;
 using NitroxModel.Helper;
+using NitroxPatcher.PatternMatching;
 
 namespace NitroxTest.Patcher
 {
@@ -32,6 +34,46 @@ namespace NitroxTest.Patcher
             return GetInstructionsFromIL(GetILInstructions(targetMethod));
         }
 
+        public static IEnumerable<KeyValuePair<OpCode, object>> GetILInstructions(MethodInfo method)
+        {
+            return PatchProcessor.ReadMethodBody(method, method.GetILGenerator());
+        }
+
+        public static IEnumerable<KeyValuePair<OpCode, object>> GetILInstructions(DynamicMethod method)
+        {
+            return PatchProcessor.ReadMethodBody(method, method.GetILGenerator());
+        }
+
+        public static ILGenerator GetILGenerator(this MethodInfo method)
+        {
+            return new DynamicMethod(method.Name, method.ReturnType, method.GetParameters().Types()).GetILGenerator();
+        }
+
+        public static void TestPattern(MethodInfo targetMethod, InstructionsPattern pattern, out IEnumerable<CodeInstruction> originalIl, out IEnumerable<CodeInstruction> transformedIl)
+        {
+            bool shouldHappen = false;
+            originalIl = GetInstructionsFromMethod(targetMethod);
+            transformedIl = originalIl
+                            .Transform(pattern, (_, _) =>
+                            {
+                                shouldHappen = true;
+                            })
+                            .ToArray(); // Required, otherwise nothing happens.
+
+            shouldHappen.Should().BeTrue();
+        }
+
+        /// <summary>
+        ///     Clones the instructions so that the returned instructions are not the same reference.
+        /// </summary>
+        /// <remarks>
+        ///     Useful for testing code differences before and after a Harmony transpiler.
+        /// </remarks>
+        public static List<CodeInstruction> Clone(this IEnumerable<CodeInstruction> instructions)
+        {
+            return new List<CodeInstruction>(instructions.Select(il => new CodeInstruction(il)));
+        }
+
         private static ReadOnlyCollection<CodeInstruction> GetInstructionsFromIL(IEnumerable<KeyValuePair<OpCode, object>> il)
         {
             List<CodeInstruction> result = new List<CodeInstruction>();
@@ -40,17 +82,6 @@ namespace NitroxTest.Patcher
                 result.Add(new CodeInstruction(instruction.Key, instruction.Value));
             }
             return result.AsReadOnly();
-        }
-
-        public static IEnumerable<KeyValuePair<OpCode, object>> GetILInstructions(MethodInfo method)
-        {
-            DynamicMethod dynMethod = new DynamicMethod(method.Name, method.ReturnType, method.GetParameters().Select(p => p.ParameterType).ToArray(), false);
-            return PatchProcessor.ReadMethodBody(method, dynMethod.GetILGenerator());
-        }
-
-        public static IEnumerable<KeyValuePair<OpCode, object>> GetILInstructions(DynamicMethod method)
-        {
-            return PatchProcessor.ReadMethodBody(method, method.GetILGenerator());
         }
     }
 }

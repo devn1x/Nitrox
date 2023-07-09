@@ -17,10 +17,8 @@ using NitroxModel.DataStructures.GameLogic;
 using NitroxModel.DataStructures.Util;
 using NitroxModel.Helper;
 using NitroxModel.Platforms.OS.Shared;
-using NitroxModel_Subnautica.DataStructures.GameLogic;
 using NitroxServer;
 using NitroxServer.ConsoleCommands.Processor;
-using NitroxServer.GameLogic.Vehicles;
 
 namespace NitroxServer_Subnautica;
 
@@ -85,8 +83,7 @@ public class Program
             NitroxServiceLocator.BeginNewLifetimeScope();
 
             server = NitroxServiceLocator.LocateService<Server>();
-            // Sonar must be set off by default since we cannot load back as a vehicle driver (as in vanilla SN)
-            SetDefaultCyclopsState();
+
             await WaitForAvailablePortAsync(server.Port);
             CatchExitEvent();
             listenForCommands = ListenForCommandsAsync(server);
@@ -213,6 +210,11 @@ public class Program
         {
             dllFileName += ".dll";
         }
+        // If available, return cached assembly
+        if (resolvedAssemblyCache.TryGetValue(dllFileName, out Assembly val))
+        {
+            return val;
+        }
 
         // Load DLLs where this program (exe) is located
         string dllPath = Path.Combine(Path.GetDirectoryName(Assembly.GetEntryAssembly()?.Location) ?? "", "lib", dllFileName);
@@ -223,21 +225,9 @@ public class Program
             dllPath = Path.Combine(gameInstallDir.Value, "Subnautica_Data", "Managed", dllFileName);
         }
 
-        // Return cached assembly
-        if (resolvedAssemblyCache.TryGetValue(dllPath, out Assembly val))
-        {
-            return val;
-        }
-
         // Read assemblies as bytes as to not lock the file so that Nitrox can patch assemblies while server is running.
-        using (FileStream stream = new(dllPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-        using (MemoryStream mstream = new())
-        {
-            stream.CopyTo(mstream);
-            Assembly assembly = Assembly.Load(mstream.ToArray());
-            resolvedAssemblyCache[dllPath] = assembly;
-            return assembly;
-        }
+        Assembly assembly = Assembly.Load(File.ReadAllBytes(dllPath));
+        return resolvedAssemblyCache[dllFileName] = assembly;
     }
 
     /**
@@ -304,18 +294,6 @@ public class Program
     {
         Log.Info("Exiting ...");
         Server.Instance.Stop();
-    }
-
-    private static void SetDefaultCyclopsState()
-    {
-        VehicleManager vehicleManager = NitroxServiceLocator.LocateService<VehicleManager>();
-        foreach (VehicleModel vehicleModel in vehicleManager.GetVehicles())
-        {
-            if (vehicleModel is CyclopsModel cyclopsModel)
-            {
-                cyclopsModel.SonarOn = false;
-            }
-        }
     }
 
     // See: https://docs.microsoft.com/en-us/windows/console/setconsolectrlhandler

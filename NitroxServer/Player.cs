@@ -1,7 +1,8 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using NitroxModel.DataStructures;
 using NitroxModel.DataStructures.GameLogic;
 using NitroxModel.DataStructures.Unity;
+using NitroxModel.DataStructures.GameLogic.Entities;
 using NitroxModel.DataStructures.Util;
 using NitroxModel.MultiplayerSession;
 using NitroxModel.Packets;
@@ -17,7 +18,7 @@ namespace NitroxServer
         private readonly ThreadSafeSet<AbsoluteEntityCell> visibleCells;
 
         public ThreadSafeList<NitroxTechType> UsedItems { get; }
-        public ThreadSafeList<string> QuickSlotsBinding { get; set; }
+        public NitroxId[] QuickSlotsBindingIds { get; set; }
 
         public NitroxConnection Connection { get; set; }
         public PlayerSettings PlayerSettings => PlayerContext.PlayerSettings;
@@ -33,13 +34,14 @@ namespace NitroxServer
         public PlayerStatsData Stats { get; set; }
         public NitroxVector3? LastStoredPosition { get; set; }
         public Optional<NitroxId> LastStoredSubRootID { get; set; }
-        public ThreadSafeSet<string> CompletedGoals { get; }
+        public ThreadSafeDictionary<string, float> PersonalCompletedGoalsWithTimestamp { get; }
         public ThreadSafeDictionary<string, PingInstancePreference> PingInstancePreferences { get; set; }
+        public ThreadSafeList<int> PinnedRecipePreferences { get; set; }
 
         public Player(ushort id, string name, bool isPermaDeath, PlayerContext playerContext, NitroxConnection connection,
                       NitroxVector3 position, NitroxQuaternion rotation, NitroxId playerId, Optional<NitroxId> subRootId, Perms perms, PlayerStatsData stats,
-                      IEnumerable<NitroxTechType> usedItems, IEnumerable<string> quickSlotsBinding,
-                      IEnumerable<EquippedItemData> equippedItems, IEnumerable<EquippedItemData> modules, HashSet<string> completedGoals, IDictionary<string, PingInstancePreference> pingInstancePreferences)
+                      IEnumerable<NitroxTechType> usedItems, NitroxId[] quickSlotsBindingIds,
+                      IEnumerable<EquippedItemData> equippedItems, IEnumerable<EquippedItemData> modules, IDictionary<string, float> personalCompletedGoalsWithTimestamp, IDictionary<string, PingInstancePreference> pingInstancePreferences, IList<int> pinnedRecipePreferences)
         {
             Id = id;
             Name = name;
@@ -55,12 +57,13 @@ namespace NitroxServer
             LastStoredPosition = null;
             LastStoredSubRootID = Optional.Empty;
             UsedItems = new ThreadSafeList<NitroxTechType>(usedItems);
-            QuickSlotsBinding = new ThreadSafeList<string>(quickSlotsBinding);
+            QuickSlotsBindingIds = quickSlotsBindingIds;
             this.equippedItems = new ThreadSafeList<EquippedItemData>(equippedItems);
             this.modules = new ThreadSafeList<EquippedItemData>(modules);
             visibleCells = new ThreadSafeSet<AbsoluteEntityCell>();
-            CompletedGoals = new ThreadSafeSet<string>(completedGoals);
+            PersonalCompletedGoalsWithTimestamp = new ThreadSafeDictionary<string, float>(personalCompletedGoalsWithTimestamp);
             PingInstancePreferences = new(pingInstancePreferences);
+            PinnedRecipePreferences = new(pinnedRecipePreferences);
         }
 
         public static bool operator ==(Player left, Player right)
@@ -116,6 +119,11 @@ namespace NitroxServer
             return visibleCells.Contains(cell);
         }
 
+        public void ClearVisibleCells()
+        {
+            visibleCells.Clear();
+        }
+
         public void AddModule(EquippedItemData module)
         {
             modules.Add(module);
@@ -148,7 +156,13 @@ namespace NitroxServer
 
         public bool CanSee(Entity entity)
         {
-            return entity.ExistsInGlobalRoot || HasCellLoaded(entity.AbsoluteEntityCell);
+            if (entity is WorldEntity worldEntity)
+            {
+                return worldEntity.ExistsInGlobalRoot || HasCellLoaded(worldEntity.AbsoluteEntityCell);
+            }
+
+            // Assume all other entity types are in global root
+            return true;
         }
 
         public void SendPacket(Packet packet)

@@ -1,24 +1,23 @@
-﻿using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Collections.Generic;
+using System.Runtime.Serialization;
 using NitroxModel.DataStructures;
 using NitroxModel.DataStructures.GameLogic;
-using ProtoBufNet;
 
 namespace NitroxServer.GameLogic.Unlockables
 {
-    [ProtoContract, JsonObject(MemberSerialization.OptIn)]
+    [DataContract]
     public class StoryGoalData
     {
-        [JsonProperty, ProtoMember(1)]
+        [DataMember(Order = 1)]
         public ThreadSafeSet<string> CompletedGoals { get; } = new();
 
-        [JsonProperty, ProtoMember(2)]
+        [DataMember(Order = 2)]
         public ThreadSafeList<string> RadioQueue { get; } = new();
 
-        [JsonProperty, ProtoMember(3)]
+        [DataMember(Order = 3)]
         public ThreadSafeSet<string> GoalUnlocks { get; } = new();
 
-        [JsonProperty, ProtoMember(4)]
+        [DataMember(Order = 4)]
         public ThreadSafeList<NitroxScheduledGoal> ScheduledGoals { get; set; } = new();
 
         public bool RemovedLatestRadioMessage()
@@ -38,9 +37,9 @@ namespace NitroxServer.GameLogic.Unlockables
             return storyGoals;
         }
 
-        public InitialStoryGoalData GetInitialStoryGoalData(ScheduleKeeper scheduleKeeper)
+        public InitialStoryGoalData GetInitialStoryGoalData(ScheduleKeeper scheduleKeeper, Player player)
         {
-            return new InitialStoryGoalData(new List<string>(CompletedGoals), new List<string>(RadioQueue), new List<string>(GoalUnlocks), scheduleKeeper.GetScheduledGoals());
+            return new InitialStoryGoalData(new List<string>(CompletedGoals), new List<string>(RadioQueue), new List<string>(GoalUnlocks), scheduleKeeper.GetScheduledGoals(), new(player.PersonalCompletedGoalsWithTimestamp));
         }
     }
 }

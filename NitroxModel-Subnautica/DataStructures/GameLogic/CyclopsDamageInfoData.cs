@@ -1,30 +1,31 @@
 ﻿using System;
+using System.Runtime.Serialization;
 using NitroxModel.DataStructures;
-using ProtoBufNet;
+using NitroxModel.DataStructures.Unity;
 using UnityEngine;
 
 namespace NitroxModel_Subnautica.DataStructures.GameLogic
 {
     [Serializable]
-    [ProtoContract]
+    [DataContract]
     public class CyclopsDamageInfoData
     {
-        [ProtoMember(1)]
+        [DataMember(Order = 1)]
         public NitroxId ReceiverId { get; set; }
 
-        [ProtoMember(2)]
+        [DataMember(Order = 2)]
         public NitroxId DealerId { get; set; }
 
-        [ProtoMember(3)]
+        [DataMember(Order = 3)]
         public float OriginalDamage { get; set; }
 
-        [ProtoMember(4)]
+        [DataMember(Order = 4)]
         public float Damage { get; set; }
 
-        [ProtoMember(5)]
-        public Vector3 Position { get; set; }
+        [DataMember(Order = 5)]
+        public NitroxVector3 Position { get; set; }
 
-        [ProtoMember(6)]
+        [DataMember(Order = 6)]
         public DamageType Type { get; set; }
 
         protected CyclopsDamageInfoData()
@@ -32,7 +33,7 @@ namespace NitroxModel_Subnautica.DataStructures.GameLogic
             // Constructor for serialization. Has to be "protected" for json serialization.
         }
 
-        public CyclopsDamageInfoData(NitroxId receiverId, NitroxId dealerId, float originalDamage, float damage, Vector3 position, DamageType type)
+        public CyclopsDamageInfoData(NitroxId receiverId, NitroxId dealerId, float originalDamage, float damage, NitroxVector3 position, DamageType type)
         {
             ReceiverId = receiverId;
             DealerId = dealerId;

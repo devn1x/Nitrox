@@ -1,7 +1,7 @@
-﻿using System;
+using System;
+using System.Collections;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading.Tasks;
 using NitroxClient.Communication;
 using NitroxClient.GameLogic.Settings;
 using NitroxClient.Unity.Helper;
@@ -9,9 +9,8 @@ using NitroxModel.Serialization;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.Serialization;
 using UnityEngine.UI;
-using static System.Net.Mime.MediaTypeNames;
+using UWE;
 
 namespace NitroxClient.MonoBehaviours.Gui.MainMenu
 {
@@ -88,7 +87,7 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
                     return;
                 }
                 isJoining = true;
-                
+
                 txt.GetComponent<TextMeshProUGUI>().color = prevTextColor; // Visual fix for black text after click (hover state still active)
                 await OpenJoinServerMenuAsync(joinIp, joinPort)
                     .ContinueWith(t =>
@@ -112,7 +111,7 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
             }
         }
 
-        public static async Task OpenJoinServerMenuAsync(string serverIp, string serverPort)
+        public static async System.Threading.Tasks.Task OpenJoinServerMenuAsync(string serverIp, string serverPort)
         {
             if (Main == null)
             {
@@ -122,7 +121,8 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
             IPEndPoint endpoint = ResolveIPEndPoint(serverIp, serverPort);
             if (endpoint == null)
             {
-                Log.InGame($"{Language.main.Get("Nitrox_UnableToConnect")}: {serverIp}:{serverPort}");
+                Log.ErrorSensitive("Unable to contact the remote server at: {ip}:{port}", serverIp, serverPort);
+                Log.InGame($"{Language.main.Get("Nitrox_UnableToConnect")} {serverIp}:{serverPort}");
                 return;
             }
 
@@ -136,12 +136,19 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
             serverPortInput = ServerList.DEFAULT_PORT.ToString();
             showingAddServer = true;
             shouldFocus = true;
+            uGUI_MainMenu.main.canvasGroup.interactable = false;
         }
 
         private void HideAddServerWindow()
         {
-            showingAddServer = false;
-            shouldFocus = true;
+            IEnumerator SetWindowComponents()
+            {
+                showingAddServer = false;
+                shouldFocus = true;
+                yield return null;
+                uGUI_MainMenu.main.canvasGroup.interactable = true;
+            }
+            CoroutineHost.StartCoroutine(SetWindowComponents());
         }
 
         private void OnGUI()
@@ -161,7 +168,7 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
             }
         }
 
-        private async Task FindLANServersAsync()
+        private async System.Threading.Tasks.Task FindLANServersAsync()
         {
             void AddButton(IPEndPoint serverEndPoint)
             {
@@ -170,9 +177,9 @@ namespace NitroxClient.MonoBehaviours.Gui.MainMenu
                 CreateServerButton(MakeButtonText("LAN Server", serverEndPoint.Address, serverEndPoint.Port), $"{serverEndPoint.Address}", $"{serverEndPoint.Port}", true);
             }
 
-            LANDiscoveryClient.ServerFound += AddButton;
-            await LANDiscoveryClient.SearchAsync();
-            LANDiscoveryClient.ServerFound -= AddButton;
+            LANBroadcastClient.ServerFound += AddButton;
+            await LANBroadcastClient.SearchAsync();
+            LANBroadcastClient.ServerFound -= AddButton;
         }
 
         private string MakeButtonText(string serverName, object address, object port)

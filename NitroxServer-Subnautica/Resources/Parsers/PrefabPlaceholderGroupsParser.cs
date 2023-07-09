@@ -8,19 +8,19 @@ using AddressablesTools;
 using AddressablesTools.Catalog;
 using AssetsTools.NET;
 using AssetsTools.NET.Extra;
-using Mono.Cecil;
-using NitroxModel.DataStructures.Util;
+using NitroxModel.DataStructures.GameLogic;
 using NitroxServer_Subnautica.Resources.Parsers.Helper;
 using NitroxServer.GameLogic.Entities;
 using NitroxServer.Resources;
 
 namespace NitroxServer_Subnautica.Resources.Parsers;
 
-public class PrefabPlaceholderGroupsParser
+public class PrefabPlaceholderGroupsParser : IDisposable
 {
     private readonly string prefabDatabasePath;
     private readonly string aaRootPath;
     private readonly AssetsBundleManager am;
+    private readonly ThreadSafeMonoCecilTempGenerator monoGen;
 
     public PrefabPlaceholderGroupsParser()
     {
@@ -35,37 +35,30 @@ public class PrefabPlaceholderGroupsParser
         // ReSharper disable once StringLiteralTypo
         am.LoadClassPackage("classdata.tpk");
         am.LoadClassDatabaseFromPackage("2019.4.36f1");
-        am.SetMonoTempGenerator(new MonoCecilTempGenerator(managedPath));
+        am.SetMonoTempGenerator(monoGen = new(managedPath));
     }
 
-    private readonly ConcurrentDictionary<string, PrefabAsset> prefabAssetsByClassId = new();
-    private readonly ConcurrentDictionary<string, string[]> prefabPlaceholdersClassIdByGroupClassId = new();
+    private readonly ConcurrentDictionary<string, string[]> addressableCatalog = new();
+    private readonly ConcurrentDictionary<string, PrefabPlaceholderAsset> prefabPlaceholderByClassId = new();
+    private readonly ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> prefabPlaceholdersByGroupClassId = new();
 
     public Dictionary<string, PrefabPlaceholdersGroupAsset> ParseFile()
     {
         // Get all prefab-classIds linked to the (partial) bundle path
         Dictionary<string, string> prefabDatabase = LoadPrefabDatabase(prefabDatabasePath);
+
+        // Loading all prefabs by their classId and file paths (first the path to the prefab then the dependencies)
+        LoadAddressableCatalog(prefabDatabase);
+
+        // Select only prefabs with a PrefabPlaceholdersGroups component in the root ans link them with their dependencyPaths
+        ConcurrentDictionary<string, string[]> prefabPlaceholdersGroupPaths = GetAllPrefabPlaceholdersGroupsFast();
+        // Do not remove: the internal cache list is slowing down the process more than loading a few assets again. There maybe is a better way in the new AssetToolsNetVersion but we need a byte to texture library bc ATNs sub-package is only for netstandard.
         am.UnloadAll();
 
-        // Loading all prefabs by their classId and the path + paths of dependencies for each
-        Dictionary<string, string[]> loadAddressableCatalog = LoadAddressableCatalog(prefabDatabase);
-        am.UnloadAll();
+        // Get all needed data for the filtered PrefabPlaceholdersGroups to construct PrefabPlaceholdersGroupAssets and add them to the dictionary by classId
+        ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> prefabPlaceholderGroupsByGroupClassId = GetPrefabPlaceholderGroupAssetsByGroupClassId(prefabPlaceholdersGroupPaths);
 
-        // Filter out all prefabs with a PrefabPlaceholdersGroups component in the root
-        ConcurrentDictionary<string, string[]> prefabPlaceholdersGroupPaths = GetAllPrefabPlaceholdersGroupsFast(loadAddressableCatalog);
-        am.UnloadAll();
-
-        // Get all needed data for the filtered prefabPlaceholdersGroups to construct PrefabPlaceholdersGroupAssets and add them to the dictionary by classId
-        //Dictionary<string, PrefabPlaceholdersGroupAsset> prefabPlaceholderGroupsByGroupClassId = GetPrefabPlaceholderGroupAssetsByGroupClassId(prefabPlaceholdersGroupPaths, loadAddressableCatalog);
-        ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> prefabPlaceholderGroupsByGroupClassId = GetPrefabPlaceholderGroupAssetsByGroupClassId(prefabPlaceholdersGroupPaths, loadAddressableCatalog);
-        am.UnloadAll(true);
-        
-        foreach (KeyValuePair<string,AssemblyDefinition> pair in am.monoTempGenerator.loadedAssemblies)
-        {
-            pair.Value.Dispose();
-        }
-        
-        return prefabPlaceholderGroupsByGroupClassId.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, EqualityComparer<string>.Default);;
+        return new Dictionary<string, PrefabPlaceholdersGroupAsset>(prefabPlaceholderGroupsByGroupClassId);
     }
 
     private static Dictionary<string, string> LoadPrefabDatabase(string fullFilename)
@@ -75,6 +68,7 @@ public class PrefabPlaceholderGroupsParser
         {
             return null;
         }
+
         using FileStream input = File.OpenRead(fullFilename);
         using BinaryReader binaryReader = new(input);
         int num = binaryReader.ReadInt32();
@@ -89,11 +83,10 @@ public class PrefabPlaceholderGroupsParser
         return prefabFiles;
     }
 
-    private Dictionary<string, string[]> LoadAddressableCatalog(Dictionary<string, string> prefabDatabase)
+    private void LoadAddressableCatalog(Dictionary<string, string> prefabDatabase)
     {
         ContentCatalogData ccd = AddressablesJsonParser.FromString(File.ReadAllText(Path.Combine(aaRootPath, "catalog.json")));
 
-        Dictionary<string, string[]> prefabBundlePathsByClassId = new();
         foreach (KeyValuePair<string, string> prefabAddressable in prefabDatabase)
         {
             foreach (ResourceLocation resourceLocation in ccd.Resources[prefabAddressable.Value])
@@ -104,28 +97,29 @@ public class PrefabPlaceholderGroupsParser
                 }
 
                 List<ResourceLocation> resourceLocations = ccd.Resources[resourceLocation.Dependency];
-                prefabBundlePathsByClassId.Add(prefabAddressable.Key, resourceLocations.Select(x => x.InternalId).ToArray());
+
+                if (!addressableCatalog.TryAdd(prefabAddressable.Key, resourceLocations.Select(x => x.InternalId).ToArray()))
+                {
+                    throw new InvalidOperationException($"Couldn't add item to {nameof(addressableCatalog)}");
+                }
+
                 break;
             }
         }
-
-        return prefabBundlePathsByClassId;
     }
 
-
-    private ConcurrentDictionary<string, string[]> GetAllPrefabPlaceholdersGroupsFast(Dictionary<string, string[]> loadAddressableCatalog)
+    private ConcurrentDictionary<string, string[]> GetAllPrefabPlaceholdersGroupsFast()
     {
         ConcurrentDictionary<string, string[]> prefabPlaceholdersGroupPaths = new();
         byte[] prefabPlaceholdersGroupHash = Array.Empty<byte>();
 
-
         int aaIndex;
-        for (aaIndex = 0; aaIndex < loadAddressableCatalog.Count; aaIndex++)
+        for (aaIndex = 0; aaIndex < addressableCatalog.Count; aaIndex++)
         {
-            KeyValuePair<string, string[]> keyValuePair = loadAddressableCatalog.ElementAt(aaIndex);
+            KeyValuePair<string, string[]> keyValuePair = addressableCatalog.ElementAt(aaIndex);
             BundleFileInstance bundleFile = am.LoadBundleFile(am.CleanBundlePath(keyValuePair.Value[0]));
             AssetsFileInstance assetFileInstance = am.LoadAssetsFileFromBundle(bundleFile, 0);
-            
+
             foreach (AssetFileInfo monoScriptInfo in assetFileInstance.file.GetAssetsOfType(AssetClassID.MonoScript))
             {
                 AssetTypeValueField monoScript = am.GetBaseField(assetFileInstance, monoScriptInfo);
@@ -140,6 +134,7 @@ public class PrefabPlaceholderGroupsParser
                 {
                     prefabPlaceholdersGroupHash[i] = monoScript["m_PropertiesHash"][i].AsByte;
                 }
+
                 break;
             }
 
@@ -149,23 +144,24 @@ public class PrefabPlaceholderGroupsParser
             }
         }
 
-        Parallel.ForEach(loadAddressableCatalog.Skip(aaIndex), (keyValuePair) =>
+        Parallel.ForEach(addressableCatalog.Skip(aaIndex), (keyValuePair) =>
         {
             AssetsBundleManager bundleManagerInst = am.Clone();
-            BundleFileInstance bundleFile = bundleManagerInst.LoadBundleFile(am.CleanBundlePath(keyValuePair.Value[0]));
+            BundleFileInstance bundleFile = bundleManagerInst.LoadBundleFile(bundleManagerInst.CleanBundlePath(keyValuePair.Value[0]));
             AssetsFileInstance assetFileInstance = bundleManagerInst.LoadAssetsFileFromBundle(bundleFile, 0);
 
             if (assetFileInstance.file.Metadata.TypeTreeTypes.Any(typeTree => typeTree.TypeId == (int)AssetClassID.MonoBehaviour && typeTree.TypeHash.data.SequenceEqual(prefabPlaceholdersGroupHash)))
             {
                 prefabPlaceholdersGroupPaths.TryAdd(keyValuePair.Key, keyValuePair.Value);
             }
+
             bundleManagerInst.UnloadAll();
         });
-        
+
         return prefabPlaceholdersGroupPaths;
     }
 
-    private ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> GetPrefabPlaceholderGroupAssetsByGroupClassId(ConcurrentDictionary<string, string[]> prefabPlaceholdersGroupPaths, Dictionary<string, string[]> loadAddressableCatalog)
+    private ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> GetPrefabPlaceholderGroupAssetsByGroupClassId(ConcurrentDictionary<string, string[]> prefabPlaceholdersGroupPaths)
     {
         ConcurrentDictionary<string, PrefabPlaceholdersGroupAsset> prefabPlaceholderGroupsByGroupClassId = new();
 
@@ -174,28 +170,18 @@ public class PrefabPlaceholderGroupsParser
             AssetsBundleManager bundleManagerInst = am.Clone();
             AssetsFileInstance assetFileInst = bundleManagerInst.LoadBundleWithDependencies(keyValuePair.Value);
 
-            PrefabAsset groupAsset = CachePrefabAssetOfBundle(bundleManagerInst, assetFileInst, keyValuePair.Key);
+            PrefabPlaceholdersGroupAsset prefabPlaceholderGroup = GetAndCachePrefabPlaceholdersGroupOfBundle(bundleManagerInst, assetFileInst, keyValuePair.Key);
             bundleManagerInst.UnloadAll();
 
-            List<PrefabAsset> spawnablePrefabs = new();
-            foreach (string prefabPlaceholdersClassId in prefabPlaceholdersClassIdByGroupClassId[keyValuePair.Key])
+            if (!prefabPlaceholderGroupsByGroupClassId.TryAdd(keyValuePair.Key, prefabPlaceholderGroup))
             {
-                string[] paths = loadAddressableCatalog[prefabPlaceholdersClassId];
-                AssetsFileInstance spawnableAssetFileInst = bundleManagerInst.LoadBundleWithDependencies(paths);
-
-                spawnablePrefabs.Add(CachePrefabAssetOfBundle(bundleManagerInst, spawnableAssetFileInst, prefabPlaceholdersClassId));
-                bundleManagerInst.UnloadAll();
-            }
-
-            if (!prefabPlaceholderGroupsByGroupClassId.TryAdd(keyValuePair.Key, new PrefabPlaceholdersGroupAsset(spawnablePrefabs, groupAsset.Children)))
-            {
-                throw new InvalidOperationException("Couldn't add item to ConcurrentDictionary");
+                throw new InvalidOperationException($"Couldn't add item to {nameof(prefabPlaceholderGroupsByGroupClassId)}");
             }
         });
         return prefabPlaceholderGroupsByGroupClassId;
     }
 
-    private PrefabAsset CachePrefabAssetOfBundle(AssetsBundleManager amInst, AssetsFileInstance assetFileInst, string classId)
+    private static void GetPrefabGameObjectInfoFromBundle(AssetsBundleManager amInst, AssetsFileInstance assetFileInst, out AssetFileInfo prefabGameObjectInfo)
     {
         //Get the main asset with "m_Container" of the "AssetBundle-asset" inside the bundle
         AssetFileInfo assetBundleInfo = assetFileInst.file.Metadata.GetAssetInfo(1);
@@ -203,56 +189,74 @@ public class PrefabPlaceholderGroupsParser
         AssetTypeValueField assetBundleContainer = assetBundleValue["m_Container.Array"];
         long rootAssetPathId = assetBundleContainer.Children[0][1]["asset.m_PathID"].AsLong;
 
-        AssetFileInfo prefabGameObjectInfo = assetFileInst.file.Metadata.GetAssetInfo(rootAssetPathId);
-        AssetTypeValueField prefabGameObject = amInst.GetBaseField(assetFileInst, prefabGameObjectInfo);
-
-        return CachePrefabAsset(amInst, assetFileInst, prefabGameObjectInfo, prefabGameObject, classId, true);
+        prefabGameObjectInfo = assetFileInst.file.Metadata.GetAssetInfo(rootAssetPathId);
     }
 
-    private PrefabAsset CachePrefabAsset(AssetsBundleManager amInst, AssetsFileInstance assetFileInst, AssetFileInfo rootGameObjectInfo, AssetTypeValueField rootGameObject, string classId, bool isRoot = false)
+    private PrefabPlaceholdersGroupAsset GetAndCachePrefabPlaceholdersGroupOfBundle(AssetsBundleManager amInst, AssetsFileInstance assetFileInst, string classId)
     {
-        if (!string.IsNullOrEmpty(classId) && prefabAssetsByClassId.TryGetValue(classId, out PrefabAsset cachedPrefabAsset))
-        {
-            return cachedPrefabAsset;
-        }
+        GetPrefabGameObjectInfoFromBundle(amInst, assetFileInst, out AssetFileInfo prefabGameObjectInfo);
+        return GetAndCachePrefabPlaceholdersGroupGroup(amInst, assetFileInst, prefabGameObjectInfo, classId);
+    }
 
-        string gameObjectName = rootGameObject["m_Name"].AsString;
+    private PrefabPlaceholdersGroupAsset GetAndCachePrefabPlaceholdersGroupGroup(AssetsBundleManager amInst, AssetsFileInstance assetFileInst, AssetFileInfo rootGameObjectInfo, string classId)
+    {
+        if (!string.IsNullOrEmpty(classId) && prefabPlaceholdersByGroupClassId.TryGetValue(classId, out PrefabPlaceholdersGroupAsset cachedPrefabPlaceholdersGroup))
+        {
+            return cachedPrefabPlaceholdersGroup;
+        }
 
         AssetFileInfo prefabPlaceholdersGroupInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, rootGameObjectInfo, "PrefabPlaceholdersGroup");
-        if (prefabPlaceholdersGroupInfo != null)
+        if (prefabPlaceholdersGroupInfo == null)
         {
-            AssetTypeValueField prefabPlaceholdersGroup = amInst.GetBaseField(assetFileInst, prefabPlaceholdersGroupInfo);
-            List<string> prefabPlaceholders = new();
-            foreach (AssetTypeValueField prefabPlaceholderPtr in prefabPlaceholdersGroup["prefabPlaceholders"])
-            {
-                AssetTypeValueField prefabPlaceholder = amInst.GetExtAsset(assetFileInst, prefabPlaceholderPtr).baseField;
-                prefabPlaceholders.Add(prefabPlaceholder["prefabClassId"].AsString);
-
-            }
-
-            prefabPlaceholdersClassIdByGroupClassId.TryAdd(classId, prefabPlaceholders.ToArray());
+            return null;
         }
 
-        if (string.IsNullOrEmpty(classId))
+        AssetTypeValueField prefabPlaceholdersGroupScript = amInst.GetBaseField(assetFileInst, prefabPlaceholdersGroupInfo);
+        List<AssetTypeValueField> prefabPlaceholdersOnGroup = prefabPlaceholdersGroupScript["prefabPlaceholders"].Children;
+
+        PrefabPlaceholderAsset[] prefabPlaceholders = new PrefabPlaceholderAsset[prefabPlaceholdersOnGroup.Count];
+        for (int index = 0; index < prefabPlaceholdersOnGroup.Count; index++)
         {
-            AssetFileInfo prefabIdentifierInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, rootGameObjectInfo, "PrefabIdentifier");
-            if (prefabIdentifierInfo != null)
-            {
-                AssetTypeValueField prefabIdentifier = amInst.GetBaseField(assetFileInst, prefabIdentifierInfo);
-                classId = prefabIdentifier["classId"].AsString;
-            }
+            AssetTypeValueField prefabPlaceholderPtr = prefabPlaceholdersOnGroup[index];
+            AssetTypeValueField prefabPlaceholder = amInst.GetExtAsset(assetFileInst, prefabPlaceholderPtr).baseField;
+            prefabPlaceholders[index] = GetAndCachePrefabPlaceholderAsset(amInst, prefabPlaceholder["prefabClassId"].AsString);
         }
 
-        Optional<string> prefabPlaceholderId = Optional.Empty;
-        AssetFileInfo prefabPlaceholderInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, rootGameObjectInfo, "PrefabPlaceholder");
-        if (prefabPlaceholderInfo != null)
+        NitroxTechType nitroxTechType = null;
+        AssetFileInfo techTagInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, rootGameObjectInfo, nameof(TechTag));
+        if (techTagInfo != null)
         {
-            AssetTypeValueField prefabIdentifier = amInst.GetBaseField(assetFileInst, prefabPlaceholderInfo);
-            prefabPlaceholderId = Optional.Of(prefabIdentifier["prefabClassId"].AsString);
+            AssetTypeValueField entitySlot = amInst.GetBaseField(assetFileInst, techTagInfo);
+            TechType techType = (TechType)entitySlot["type"].AsInt;
+
+            nitroxTechType = new NitroxTechType(techType.ToString());
         }
-        
+
+        PrefabPlaceholdersGroupAsset prefabPlaceholdersGroup = new(prefabPlaceholders, nitroxTechType);
+
+        prefabPlaceholdersByGroupClassId.TryAdd(classId, prefabPlaceholdersGroup);
+        return prefabPlaceholdersGroup;
+    }
+
+    private PrefabPlaceholderAsset GetAndCachePrefabPlaceholderAsset(AssetsBundleManager amInst, string classId)
+    {
+        if (!string.IsNullOrEmpty(classId) && prefabPlaceholderByClassId.TryGetValue(classId, out PrefabPlaceholderAsset cachedPrefabPlaceholder))
+        {
+            return cachedPrefabPlaceholder;
+        }
+
+        if (string.IsNullOrEmpty(classId) || !addressableCatalog.TryGetValue(classId, out string[] assetPaths))
+        {
+            Log.Error($"Could get PrefabPlaceholder with classId: {classId}");
+            return null;
+        }
+
+        AssetsFileInstance assetFileInst = amInst.LoadBundleWithDependencies(assetPaths);
+
+        GetPrefabGameObjectInfoFromBundle(amInst, assetFileInst, out AssetFileInfo prefabGameObjectInfo);
+
         NitroxEntitySlot nitroxEntitySlot = null;
-        AssetFileInfo entitySlotInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, rootGameObjectInfo, "EntitySlot");
+        AssetFileInfo entitySlotInfo = amInst.GetMonoBehaviourFromGameObject(assetFileInst, prefabGameObjectInfo, "EntitySlot");
         if (entitySlotInfo != null)
         {
             AssetTypeValueField entitySlot = amInst.GetBaseField(assetFileInst, entitySlotInfo);
@@ -267,34 +271,14 @@ public class PrefabPlaceholderGroupsParser
             nitroxEntitySlot = new NitroxEntitySlot(biomeType, allowedTypes.ToArray());
         }
 
-        AssetTypeValueField transform = amInst.GetTransformComponent(assetFileInst, rootGameObject);
+        PrefabPlaceholderAsset prefabPlaceholderAsset = new(classId, nitroxEntitySlot);
+        prefabPlaceholderByClassId[classId] = prefabPlaceholderAsset;
+        return prefabPlaceholderAsset;
+    }
 
-        TransformAsset transformAsset = new()
-        {
-            LocalPosition = transform["m_LocalPosition"].AsNitroxVector3(),
-            LocalRotation = transform["m_LocalRotation"].AsNitroxQuaternion(),
-            LocalScale = transform["m_LocalScale"].AsNitroxVector3()
-        };
-
-        List<PrefabAsset> children = new();
-        foreach (AssetTypeValueField child in transform["m_Children"]["Array"])
-        {
-            AssetExternal childExt = amInst.GetExtAsset(assetFileInst, child);
-            AssetTypeValueField childValue = childExt.baseField;
-
-            AssetTypeValueField childGameObject = childValue["m_GameObject"];
-            AssetExternal childGameObjectExt = amInst.GetExtAsset(assetFileInst, childGameObject);
-            AssetTypeValueField childGameObjectValue = childGameObjectExt.baseField;
-            children.Add(CachePrefabAsset(amInst, assetFileInst, childGameObjectExt.info, childGameObjectValue, string.Empty));
-        }
-
-        PrefabAsset prefabAsset = new(gameObjectName, classId, transformAsset, children, Optional.OfNullable(nitroxEntitySlot), prefabPlaceholderId);
-
-        if (isRoot)
-        {
-            prefabAssetsByClassId.TryAdd(classId, prefabAsset);
-        }
-
-        return prefabAsset;
+    public void Dispose()
+    {
+        monoGen.Dispose();
+        am.UnloadAll(true);
     }
 }

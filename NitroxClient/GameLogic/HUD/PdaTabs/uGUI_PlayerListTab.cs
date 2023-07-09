@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using NitroxClient.Communication.Abstract;
@@ -31,15 +31,28 @@ public class uGUI_PlayerListTab : uGUI_PingTab
 
     public override void Awake()
     {
-        base.Awake();
+        // Copied from uGUI_PingTab.Awake but we don't want it to be executed because it creates a PrefabPool
+        selectableVisibilityToggle = new SelectableWrapper(visibilityToggle, delegate (GameInput.Button button)
+        {
+            if (button == GameInput.Button.UISubmit)
+            {
+                visibilityToggle.isOn = !visibilityToggle.isOn;
+                return true;
+            }
+
+            return false;
+        });
+
         nitroxPDATabManager = NitroxServiceLocator.LocateService<NitroxPDATabManager>();
         playerManager = NitroxServiceLocator.LocateService<PlayerManager>();
         localPlayer = NitroxServiceLocator.LocateService<LocalPlayer>();
         packetSender = NitroxServiceLocator.LocateService<IPacketSender>();
         // Need to reassign manually these variables and get rid of the objects we don't need
         content = gameObject.FindChild("Content").GetComponent<CanvasGroup>();
-        pingManagerLabel = gameObject.FindChild("PingManagerLabel").GetComponent<TextMeshProUGUI>();
+        pingManagerLabel = gameObject.GetComponentInChildren<TextMeshProUGUI>();
+        scrollRect = gameObject.GetComponentInChildren<ScrollRect>();
         pingCanvas = (RectTransform)content.transform.Find("ScrollView/Viewport/ScrollCanvas");
+
         pool = new PrefabPool<uGUI_PlayerPingEntry>(prefabEntry, pingCanvas, 8, 4, delegate (uGUI_PlayerPingEntry entry)
         {
             entry.Uninitialize();
@@ -49,9 +62,10 @@ public class uGUI_PlayerListTab : uGUI_PingTab
         });
     }
 
-    private IEnumerator Start()
+    public IEnumerator Start()
     {
-        Destroy(gameObject.FindChild("ButtonAll"));
+        Transform buttonAll = content.transform.Find("ButtonAll");
+        DestroyImmediate(buttonAll.gameObject);
 
         yield return LoadAllAssets(NitroxAssetBundle.PLAYER_LIST_TAB);
 
@@ -68,6 +82,7 @@ public class uGUI_PlayerListTab : uGUI_PingTab
         }
 
         FinishedLoadingAssets = true;
+        _isDirty = true;
     }
     
     public Sprite GetSprite(string assetName)
@@ -86,13 +101,19 @@ public class uGUI_PlayerListTab : uGUI_PingTab
         playerManager.onRemove += OnRemove;
     }
 
+    public new void OnDestroy()
+    {
+        playerManager.onCreate -= OnAdd;
+        playerManager.onRemove -= OnRemove;
+    }
+
     public override void OnLanguageChanged()
     {
         pingManagerLabel.text = Language.main.Get("Nitrox_PlayerListTabName");
         entries.Values.ForEach(entry => entry.OnLanguageChanged());
     }
 
-    public void LateUpdate()
+    public override void OnLateUpdate(bool _)
     {
         UpdateEntries();
     }
@@ -163,7 +184,7 @@ public class uGUI_PlayerListTab : uGUI_PingTab
         GameObject newPrefab = Instantiate(basePrefab);
         newPrefab.name = "PlayerEntry";
         // We never want this to appear
-        Destroy(newPrefab.FindChild("ColorToggle"));
+        DestroyImmediate(newPrefab.FindChild("ColorToggle"));
 
         // Need to modify the pingTab's script from uGUI_PingEntry to uGUI_PlayerEntry
         uGUI_PingEntry pingEntry = newPrefab.GetComponent<uGUI_PingEntry>();
@@ -176,7 +197,7 @@ public class uGUI_PlayerListTab : uGUI_PingTab
         playerEntry.id = pingEntry.id;
         playerEntry.spriteVisible = pingEntry.spriteVisible;
         playerEntry.spriteHidden = pingEntry.spriteHidden;
-        Destroy(pingEntry);
+        DestroyImmediate(pingEntry);
 
         // Make buttons for mute, kick, tp
         Transform container = newPrefab.transform;

@@ -1,4 +1,5 @@
-﻿using System.Collections;
+using System.Collections;
+using NitroxClient.Communication;
 using NitroxClient.Communication.Abstract;
 using NitroxClient.GameLogic.InitialSync.Base;
 using NitroxClient.MonoBehaviours;
@@ -13,6 +14,8 @@ namespace NitroxClient.GameLogic.InitialSync
 {
     public class PlayerPositionInitialSyncProcessor : InitialSyncProcessor
     {
+        private static readonly Vector3 spawnRelativeToEscapePod = new Vector3(0.9f, 2.1f, 0);
+
         private readonly IPacketSender packetSender;
 
         public PlayerPositionInitialSyncProcessor(IPacketSender packetSender)
@@ -21,14 +24,15 @@ namespace NitroxClient.GameLogic.InitialSync
 
             DependentProcessors.Add(typeof(PlayerInitialSyncProcessor)); // Make sure the player is configured
             DependentProcessors.Add(typeof(BuildingInitialSyncProcessor)); // Players can be spawned in buildings
-            DependentProcessors.Add(typeof(EscapePodInitialSyncProcessor)); // Players can be spawned in escapePod
-            DependentProcessors.Add(typeof(VehicleInitialSyncProcessor)); // Players can be spawned in vehicles
+            DependentProcessors.Add(typeof(GlobalRootInitialSyncProcessor)); // Players can be spawned in entities in the global root (such as vehicles/escape pod)
         }
 
         public override IEnumerator Process(InitialPlayerSync packet, WaitScreen.ManualWaitItem waitScreenItem)
         {
             // We freeze the player so that he doesn't fall before the cells around him have loaded
             Player.main.cinematicModeActive = true;
+
+            AttachPlayerToEscapePod(packet.AssignedEscapePodId);
 
             Vector3 position = packet.PlayerSpawnData.ToUnity();
             Quaternion rotation = packet.PlayerSpawnRotation.ToUnity();
@@ -39,7 +43,7 @@ namespace NitroxClient.GameLogic.InitialSync
             Player.main.SetPosition(position, rotation);
 
             // Player.Update is setting SubRootID to null after Player position is set
-            using (packetSender.Suppress<EscapePodChanged>())
+            using (PacketSuppressor<EscapePodChanged>.Suppress())
             {
                 Player.main.ValidateEscapePod();
             }
@@ -67,8 +71,7 @@ namespace NitroxClient.GameLogic.InitialSync
                 yield break;
             }
 
-            // If player is not swimming
-            Player.main.SetCurrentSub(subRoot);
+            Player.main.SetCurrentSub(subRoot, true);
             if (subRoot.isBase)
             {
                 // If the player's in a base, we don't need to wait for the world to load
@@ -82,6 +85,21 @@ namespace NitroxClient.GameLogic.InitialSync
             Vector3 positionInVehicle = vehicleAngle * position + rootTransform.position;
             Player.main.SetPosition(positionInVehicle, rotation * vehicleAngle);
             Player.main.cinematicModeActive = false;
+            Player.main.UpdateIsUnderwater();
         }
+
+        private void AttachPlayerToEscapePod(NitroxId escapePodId)
+        {
+            GameObject escapePod = NitroxEntity.RequireObjectFrom(escapePodId);
+
+            EscapePod.main.transform.position = escapePod.transform.position;
+            EscapePod.main.playerSpawn.position = escapePod.transform.position + spawnRelativeToEscapePod;
+
+            Player.main.transform.position = EscapePod.main.playerSpawn.position;
+            Player.main.transform.rotation = EscapePod.main.playerSpawn.rotation;
+
+            Player.main.currentEscapePod = escapePod.GetComponent<EscapePod>();
+        }
+
     }
 }

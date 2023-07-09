@@ -2,14 +2,14 @@
 using HarmonyLib;
 using NitroxClient.MonoBehaviours.Overrides;
 using NitroxModel_Subnautica.DataStructures;
-using NitroxModel_Subnautica.DataStructures.GameLogic.Buildings.Rotation;
 using NitroxModel_Subnautica.DataStructures.GameLogic.Buildings.Rotation.Metadata;
+using NitroxModel.Helper;
 
 namespace NitroxPatcher.Patches.Dynamic
 {
     class Base_GetAdjacentFace_Patch : NitroxPatch, IDynamicPatch
     {
-        public readonly MethodInfo METHOD = typeof(Base).GetMethod(nameof(Base.GetAdjacentFace), BindingFlags.Public | BindingFlags.Static);
+        public readonly MethodInfo METHOD = Reflect.Method(() => Base.GetAdjacentFace(default(Base.Face)));
 
         public static bool Prefix(ref Base.Face __result, Base.Face face)
         {
@@ -25,7 +25,7 @@ namespace NitroxPatcher.Patches.Dynamic
                         return false;
                 }
             }
-            
+
             return true;
         }
 

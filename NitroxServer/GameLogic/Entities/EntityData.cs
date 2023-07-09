@@ -1,17 +1,17 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
-using Newtonsoft.Json;
 using NitroxModel.DataStructures;
 using NitroxModel.DataStructures.GameLogic;
+using NitroxModel.DataStructures.GameLogic.Entities;
 using ProtoBufNet;
 
 namespace NitroxServer.GameLogic.Entities
 {
-    [ProtoContract, JsonObject(MemberSerialization.OptIn)]
+    [DataContract]
     public class EntityData
     {
-        [JsonProperty, ProtoMember(1)]
+        [DataMember(Order = 1)]
         public List<Entity> Entities = new List<Entity>();
 
         [ProtoAfterDeserialization]
@@ -21,6 +21,13 @@ namespace NitroxServer.GameLogic.Entities
             // children to their respective parent entities.
             Dictionary<NitroxId, Entity> entitiesById = Entities.ToDictionary(entity => entity.Id);
 
+            // We will re-build the child hierarchy below and want to avoid duplicates.
+            // TODO: Rework system to no longer persist children entities because they are duplicates.
+            foreach (Entity entity in Entities)
+            {
+                entity.ChildEntities.Clear();
+            }
+
             foreach (Entity entity in Entities)
             {
                 if (entity.ParentId != null)
@@ -28,7 +35,11 @@ namespace NitroxServer.GameLogic.Entities
                     if (entitiesById.TryGetValue(entity.ParentId, out Entity parent))
                     {
                         parent.ChildEntities.Add(entity);
-                        entity.Transform.SetParent(parent.Transform, false);
+
+                        if (entity is WorldEntity we && parent is WorldEntity weParent)
+                        {
+                            we.Transform.SetParent(weParent.Transform, false);
+                        }
                     }
                 }
             }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using NitroxModel.Core;
@@ -13,10 +13,8 @@ using NitroxServer.GameLogic;
 using NitroxServer.GameLogic.Bases;
 using NitroxServer.GameLogic.Entities;
 using NitroxServer.GameLogic.Entities.Spawning;
-using NitroxServer.GameLogic.Items;
 using NitroxServer.GameLogic.Players;
 using NitroxServer.GameLogic.Unlockables;
-using NitroxServer.GameLogic.Vehicles;
 using NitroxServer.Resources;
 using NitroxServer.Serialization.Upgrade;
 
@@ -55,12 +53,12 @@ namespace NitroxServer.Serialization.World
             Serializer = (mode == ServerSerializerMode.PROTOBUF) ? protoBufSerializer : jsonSerializer;
         }
 
-        public bool Save(World world, string saveDir)
+        public bool Save(World world, string saveDir) => Save(PersistedWorldData.From(world), saveDir);
+
+        internal bool Save(PersistedWorldData persistedData, string saveDir)
         {
             try
             {
-                PersistedWorldData persistedData = PersistedWorldData.From(world);
-
                 if (!Directory.Exists(saveDir))
                 {
                     Directory.CreateDirectory(saveDir);
@@ -95,26 +93,38 @@ namespace NitroxServer.Serialization.World
                 return Optional.Empty;
             }
 
+            UpgradeSave(saveDir);
+
+            PersistedWorldData persistedData = LoadDataFromPath(saveDir);
+
+            if (persistedData == null)
+            {
+                return Optional.Empty;
+            }
+
+            World world = CreateWorld(persistedData, config.GameMode);
+
+            return Optional.Of(world);
+        }
+
+        internal PersistedWorldData LoadDataFromPath(string saveDir)
+        {
             try
             {
-                PersistedWorldData persistedData = new();
-
-
-                UpgradeSave(saveDir);
-
-                persistedData.BaseData = Serializer.Deserialize<BaseData>(Path.Combine(saveDir, $"BaseData{FileEnding}"));
-                persistedData.PlayerData = Serializer.Deserialize<PlayerData>(Path.Combine(saveDir, $"PlayerData{FileEnding}"));
-                persistedData.WorldData = Serializer.Deserialize<WorldData>(Path.Combine(saveDir, $"WorldData{FileEnding}"));
-                persistedData.EntityData = Serializer.Deserialize<EntityData>(Path.Combine(saveDir, $"EntityData{FileEnding}"));
+                PersistedWorldData persistedData = new()
+                {
+                    BaseData = Serializer.Deserialize<BaseData>(Path.Combine(saveDir, $"BaseData{FileEnding}")),
+                    PlayerData = Serializer.Deserialize<PlayerData>(Path.Combine(saveDir, $"PlayerData{FileEnding}")),
+                    WorldData = Serializer.Deserialize<WorldData>(Path.Combine(saveDir, $"WorldData{FileEnding}")),
+                    EntityData = Serializer.Deserialize<EntityData>(Path.Combine(saveDir, $"EntityData{FileEnding}"))
+                };
 
                 if (!persistedData.IsValid())
                 {
                     throw new InvalidDataException("Save files are not valid");
                 }
 
-                World world = CreateWorld(persistedData, config.GameMode);
-
-                return Optional.Of(world);
+                return persistedData;
             }
             catch (Exception ex)
             {
@@ -130,9 +140,9 @@ namespace NitroxServer.Serialization.World
                 }
             }
 
-            return Optional.Empty;
+            return null;
         }
-        
+
         public World Load()
         {
             Optional<World> fileLoadedWorld = LoadFromFile(Path.Combine(WorldManager.SavesFolderDir, config.SaveName));
@@ -153,15 +163,12 @@ namespace NitroxServer.Serialization.World
                 PlayerData = PlayerData.From(new List<Player>()),
                 WorldData = new WorldData()
                 {
-                    EscapePodData = EscapePodData.From(new List<EscapePodModel>()),
                     GameData = new GameData
                     {
                         PDAState = new PDAStateData(),
                         StoryGoals = new StoryGoalData(),
                         StoryTiming = new StoryTimingData()
                     },
-                    InventoryData = InventoryData.From(new List<ItemData>(), new List<ItemData>(), new List<EquippedItemData>()),
-                    VehicleData = VehicleData.From(new List<VehicleModel>()),
                     ParsedBatchCells = new List<NitroxInt3>(),
                     Seed = config.Seed
                 }
@@ -184,6 +191,9 @@ namespace NitroxServer.Serialization.World
 
             Log.Info($"Loading world with seed {seed}");
 
+            EntityRegistry entityRegistry = NitroxServiceLocator.LocateService<EntityRegistry>();
+            entityRegistry.AddEntities(pWorldData.EntityData.Entities);
+
             World world = new()
             {
                 SimulationOwnershipData = new SimulationOwnershipData(),
@@ -191,18 +201,18 @@ namespace NitroxServer.Serialization.World
 
                 BaseManager = new BaseManager(pWorldData.BaseData.PartiallyConstructedPieces, pWorldData.BaseData.CompletedBasePieceHistory),
 
-                InventoryManager = new InventoryManager(pWorldData.WorldData.InventoryData.InventoryItems, pWorldData.WorldData.InventoryData.StorageSlotItems, pWorldData.WorldData.InventoryData.Modules),
+                EscapePodManager = new EscapePodManager(entityRegistry, randomStart, seed),
 
-                EscapePodManager = new EscapePodManager(pWorldData.WorldData.EscapePodData.EscapePods, randomStart, seed),
+                EntityRegistry = entityRegistry,
 
                 GameData = pWorldData.WorldData.GameData,
                 GameMode = gameMode,
                 Seed = seed
             };
 
-            world.EventTriggerer = new EventTriggerer(world.PlayerManager, pWorldData.WorldData.GameData.PDAState, pWorldData.WorldData.GameData.StoryGoals, seed, pWorldData.WorldData.GameData.StoryTiming.ElapsedTime, pWorldData.WorldData.GameData.StoryTiming.AuroraExplosionTime, pWorldData.WorldData.GameData.StoryTiming.AuroraWarningTime);
-            world.VehicleManager = new VehicleManager(pWorldData.WorldData.VehicleData.Vehicles, world.InventoryManager, world.SimulationOwnershipData);
-            world.ScheduleKeeper = new ScheduleKeeper(pWorldData.WorldData.GameData.PDAState, pWorldData.WorldData.GameData.StoryGoals, world.EventTriggerer, world.PlayerManager);
+            world.TimeKeeper = new(world.PlayerManager, pWorldData.WorldData.GameData.StoryTiming.ElapsedSeconds);
+            world.StoryManager = new(world.PlayerManager, pWorldData.WorldData.GameData.PDAState, pWorldData.WorldData.GameData.StoryGoals, world.TimeKeeper, seed, pWorldData.WorldData.GameData.StoryTiming.AuroraCountdownTime, pWorldData.WorldData.GameData.StoryTiming.AuroraWarningTime);
+            world.ScheduleKeeper = new ScheduleKeeper(pWorldData.WorldData.GameData.PDAState, pWorldData.WorldData.GameData.StoryGoals, world.TimeKeeper, world.PlayerManager);
 
             world.BatchEntitySpawner = new BatchEntitySpawner(
                 NitroxServiceLocator.LocateService<EntitySpawnPointFactory>(),
@@ -215,19 +225,29 @@ namespace NitroxServer.Serialization.World
                 world.Seed
             );
 
-            world.EntityManager = new EntityManager(pWorldData.EntityData.Entities, world.BatchEntitySpawner);
+            world.WorldEntityManager = new WorldEntityManager(world.EntityRegistry, world.BatchEntitySpawner);
 
             HashSet<NitroxTechType> serverSpawnedSimulationWhiteList = NitroxServiceLocator.LocateService<HashSet<NitroxTechType>>();
-            world.EntitySimulation = new EntitySimulation(world.EntityManager, world.SimulationOwnershipData, world.PlayerManager, serverSpawnedSimulationWhiteList);
+            world.EntitySimulation = new EntitySimulation(world.EntityRegistry, world.WorldEntityManager, world.SimulationOwnershipData, world.PlayerManager, serverSpawnedSimulationWhiteList);
 
             return world;
         }
 
         private void UpgradeSave(string saveDir)
         {
-            SaveFileVersion saveFileVersion = Serializer.Deserialize<SaveFileVersion>(Path.Combine(saveDir, $"Version{FileEnding}"));
+            SaveFileVersion saveFileVersion;
 
-            if (saveFileVersion.Version == NitroxEnvironment.Version)
+            try
+            {
+                saveFileVersion = Serializer.Deserialize<SaveFileVersion>(Path.Combine(saveDir, $"Version{FileEnding}"));
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, $"Error while upgrading save file. \"Version{FileEnding}\" couldn't be read.");
+                return;
+            }
+
+            if (saveFileVersion == null || saveFileVersion.Version == NitroxEnvironment.Version)
             {
                 return;
             }

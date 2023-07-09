@@ -1,15 +1,14 @@
-﻿using NitroxClient.GameLogic;
-using NitroxModel.Helper;
+using NitroxClient.GameLogic;
 
 namespace NitroxClient.MonoBehaviours
 {
-    class MultiplayerCyclops : MultiplayerVehicleControl
+    public class MultiplayerCyclops : MultiplayerVehicleControl
     {
         private ISubTurnHandler[] subTurnHandlers;
         private ISubThrottleHandler[] subThrottleHandlers;
         private float previousAbsYaw;
 
-        internal RemotePlayer CurrentPlayer { get; set; }
+        public RemotePlayer CurrentPlayer { get; set; }
 
         protected override void Awake()
         {
